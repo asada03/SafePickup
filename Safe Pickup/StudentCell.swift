@@ -12,9 +12,26 @@ class StudentCell: UITableViewCell {
 
     @IBOutlet weak var containerView: UIView!
     @IBOutlet weak var nameLabel: UILabel!
-    @IBOutlet weak var lastNameLabrel: UILabel!
+    @IBOutlet weak var lastNameLabel: UILabel!
     @IBOutlet weak var messageLabel: UILabel!
     @IBOutlet weak var classroomLabel: UILabel!
+    
+    var willPickup = true {
+        didSet {
+            if willPickup {
+                containerView.layer.borderColor = UIColor.black.cgColor
+                nameLabel.textColor = .black
+                lastNameLabel.textColor = .black
+                classroomLabel.alpha = 1.0
+            }
+            else {
+                containerView.layer.borderColor = UIColor.lightGray.cgColor
+                nameLabel.textColor = .lightGray
+                lastNameLabel.textColor = .lightGray
+                classroomLabel.alpha = 0.3
+            }
+        }
+    }
     override func awakeFromNib() {
         super.awakeFromNib()
         // Initialization code

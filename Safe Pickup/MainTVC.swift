@@ -19,16 +19,21 @@ class MainTVC: UITableViewController {
     lazy var firebaseRef = Database.database().reference()
     let locationManager = CLLocationManager()
     var userId:String!
+    var userCode:String!
     var loggedIn = false
     var students:[String:NSMutableDictionary] = [:]
+    var staff:NSDictionary?
     var studentKeys:[String] = []
     var schools:[String:NSMutableDictionary] = [:]
+    var transfers:[String:NSDictionary] = [:]
+    var transfersToMe:[String:NSDictionary] = [:]
     var doors:[String:Door] = [:]
     let dateFormatter = DateFormatter()
     var lastDate = ""
     var lastLocationUpdate:TimeInterval = 0.0
     
     var firebasePosRef:DatabaseReference?
+    var selectedStudent = ""
 
 
 
@@ -86,12 +91,13 @@ class MainTVC: UITableViewController {
                 
                 let keychain = Keychain(service: K.Keychain.service)
                 self.userId = keychain["UserID"]
-                
+
                 if self.userId == nil {
                     
                     self.createUser(uid:uid)
                 }
                 else {
+                    self.userCode = keychain["UserCode"]
                     self.start()
                 }
             }
@@ -103,16 +109,16 @@ class MainTVC: UITableViewController {
     }
     
     private func createUser(uid:String) {
-        let code = makeCode()
+        userCode = makeCode()
         
-        self.firebaseRef.child("Users/").queryOrdered(byChild: "code").queryEqual(toValue: code).observeSingleEvent(of: .value, with: { (snapshot) in
+        self.firebaseRef.child("Users/").queryOrdered(byChild: "code").queryEqual(toValue: userCode).observeSingleEvent(of: .value, with: { (snapshot) in
             if let data = snapshot.value as? NSMutableDictionary, data.count > 0 {
                 self.createUser(uid: uid) //code already in use. Try again
             }
             else {
                 let deviceData = ["creation": Date().timeIntervalSinceReferenceDate,
                                   "deviceName": UIDevice.current.name,
-                                  "code":code] as [String : Any]
+                                  "code":self.userCode] as [String : Any]
                 let deviceRef = self.firebaseRef.child("Users").child(uid)
                 
                 print ("**id: \(deviceRef.key) = \(uid)")
@@ -120,6 +126,7 @@ class MainTVC: UITableViewController {
                 
                 let keychain = Keychain(service: K.Keychain.service)
                 keychain["UserID"] = uid
+                keychain["UserCode"] = self.userCode
                 self.userId = uid
                 self.start()
             }
@@ -138,8 +145,8 @@ class MainTVC: UITableViewController {
             if let data = snapshot.value as? NSMutableDictionary {
                 self.students[snapshot.key] = data
                 self.cleanStudent(snapshot.key)
+                self.programTransfersQuery(for: snapshot.key)
                 self.tableView.reloadData()
-                
             }
         })
         
@@ -156,12 +163,59 @@ class MainTVC: UITableViewController {
         firebaseRef.child("Students").queryOrdered(byChild: "parent").queryEqual(toValue: self.userId).observe(.childRemoved, with: { (snapshot) -> Void in
             self.students.removeValue(forKey: snapshot.key)
         })
+
+        firebaseRef.child("Staff").queryOrdered(byChild: "user").queryEqual(toValue: self.userId).observe(.childAdded, with: { (snapshot) -> Void in
+            if let data = snapshot.value as? NSMutableDictionary, self.staff == nil {
+                self.staff = data
+                self.tableView.reloadData()
+            }
+
+        })
         
+        // Query for transfers from me
+        firebaseRef.child("Transfers").queryOrdered(byChild: "to").queryEqual(toValue: self.userId).observe(.childAdded, with: { (snapshot) -> Void in
+            if let data = snapshot.value as? NSDictionary {
+                self.transfersToMe[snapshot.key] = data
+                self.tableView.reloadData()
+            }
+        })
+        
+        firebaseRef.child("Transfers").queryOrdered(byChild: "to").queryEqual(toValue: self.userId).observe(.childRemoved, with: { (snapshot) -> Void in
+            if let data = snapshot.value as? NSDictionary {
+                self.transfersToMe[snapshot.key] = data
+                self.tableView.reloadData()
+            }
+        })
+        
+        firebaseRef.child("Transfers").queryOrdered(byChild: "to").queryEqual(toValue: self.userId).observe(.childChanged, with: { (snapshot) -> Void in
+            self.transfersToMe.removeValue(forKey: snapshot.key)
+            self.tableView.reloadData()
+        })
+        
+    }
+    
+    private func programTransfersQuery(for student:String) {
+
+        firebaseRef.child("Transfers").queryOrdered(byChild:"student").queryEqual(toValue: student).observe(.childAdded, with: { (snapshot) -> Void in
+            if let data = snapshot.value as? NSDictionary {
+                self.transfers[snapshot.key] = data
+                self.tableView.reloadData()
+            }
+        })
+        firebaseRef.child("Transfers").queryOrdered(byChild:"student").queryEqual(toValue: student).observe(.childChanged, with: { (snapshot) -> Void in
+            if let data = snapshot.value as? NSDictionary {
+                self.transfers[snapshot.key] = data
+                self.tableView.reloadData()
+            }
+        })
+        firebaseRef.child("Transfers").queryOrdered(byChild:"student").queryEqual(toValue: student).observe(.childRemoved, with: { (snapshot) -> Void in
+            self.transfers.removeValue(forKey: snapshot.key)
+            self.tableView.reloadData()
+        })
     }
     
     private func cleanStudent(_ key:String) {
         
-        print ("looking for student:\(key) in:\(students)")
         if let student = students[key] {
             if let date = student["date"] as? String {
                 if date != lastDate {
@@ -183,10 +237,12 @@ class MainTVC: UITableViewController {
         }
     }
     
-    private func studentNotAvailable()
+    private func personNotAvailable(student:Bool)
     {
-        let alert = UIAlertController(title: "Alumno no Disponible",
-                                      message: "Este alumno no esta disponible, por favor revise los datos e intente de nuevo.\n\nSi cree que esto es un error contacte a la dirección de su colegio inmediatamente",
+        let person = student ? "Alumno" : "Persona"
+        let thisPerson = student ? "Este alumno" : "Esta Persona"
+        let alert = UIAlertController(title: "\(person) no Disponible",
+                                      message: "\(thisPerson) no esta disponible, por favor revise los datos e intente de nuevo.\n\nSi cree que esto es un error contacte a la dirección de su colegio inmediatamente",
                                       preferredStyle: .alert)
         
         let okButton = UIAlertAction(title: "OK", style: .default, handler: { (action) -> Void in })
@@ -205,6 +261,7 @@ class MainTVC: UITableViewController {
             
             let school = alert.textFields![0].text!
             let student = alert.textFields![1].text!
+            let pin = alert.textFields![2].text!
             
             print ("Colegio:\(school) Alumno:\(student)")
             
@@ -212,27 +269,28 @@ class MainTVC: UITableViewController {
                 // Get user value
                 if let value = snapshot.value as? NSDictionary {
                     let parentString = value["parent"] as? String ?? ""
+                    let pinString = value["pin"] as? String ?? ""
                     
-                    if parentString == "" {
+                    if parentString == "", pinString != "", pinString == pin {
                         let parentData = ["parent":self.userId] as [String : Any]
                         
                         self.firebaseRef.child("Students/\(school)-\(student)").updateChildValues(parentData)
                     }
                     else {
                         print ("11111")
-                        self.studentNotAvailable()
+                        self.personNotAvailable(student: true)
                     }
                 }
                 else {
                     print ("3333")
-                    self.studentNotAvailable()
+                    self.personNotAvailable(student: true)
                 }
                 
             }) { (error) in
                 print(error.localizedDescription)
             }
-
-
+            
+            
         })
         
         // Cancel button
@@ -254,13 +312,96 @@ class MainTVC: UITableViewController {
             textField.text = ""
             textField.placeholder = "Numero del Alumno"
         }
+        alert.addTextField { (textField: UITextField) in
+            textField.keyboardAppearance = .dark
+            textField.keyboardType = .numberPad
+            textField.autocorrectionType = .default
+            textField.clearButtonMode = .whileEditing
+            textField.text = ""
+            textField.placeholder = "Pin"
+        }
         // Add action buttons and present the Alert
-        alert.addAction(submitAction)
         alert.addAction(cancel)
+        alert.addAction(submitAction)
         present(alert, animated: true, completion: nil)
-
+        
     }
-
+    
+    private func addStaff () {
+        let alert = UIAlertController(title: "Registro de Staff",
+                                      message: "Ingrese los siguientes datos",
+                                      preferredStyle: .alert)
+        
+        let submitAction = UIAlertAction(title:"Agregar", style: .default, handler: { (action) -> Void in
+            
+            let school = alert.textFields![0].text!
+            let staffNum = alert.textFields![1].text!
+            let pin = alert.textFields![2].text!
+            
+            print ("Colegio:\(school) Staff:\(staffNum)")
+            
+            self.firebaseRef.child("Staff/\(school)-\(staffNum)").observeSingleEvent(of: .value, with: { (snapshot) in
+                // Get user value
+                if let value = snapshot.value as? NSDictionary {
+                    let userString = value["user"] as? String ?? ""
+                    let pinString = value["pin"] as? String ?? ""
+                    
+                    if userString == "", pinString != "", pinString == pin {
+                        let userData = ["user":self.userId] as [String : Any]
+                        
+                        self.firebaseRef.child("Staff/\(school)-\(staffNum)").updateChildValues(userData)
+                    }
+                    else {
+                        print ("11111")
+                        self.personNotAvailable(student: false)
+                    }
+                }
+                else {
+                    print ("3333")
+                    self.personNotAvailable(student: false)
+                }
+                
+            }) { (error) in
+                print(error.localizedDescription)
+            }
+            
+            
+        })
+        
+        // Cancel button
+        let cancel = UIAlertAction(title: "Cancelar", style: .destructive, handler: { (action) -> Void in })
+        // Add 1 textField and customize it
+        alert.addTextField { (textField: UITextField) in
+            textField.keyboardAppearance = .dark
+            textField.keyboardType = .numberPad
+            textField.autocorrectionType = .default
+            textField.clearButtonMode = .whileEditing
+            textField.text = ""
+            textField.placeholder = "Numero de Colegio"
+        }
+        alert.addTextField { (textField: UITextField) in
+            textField.keyboardAppearance = .dark
+            textField.keyboardType = .numberPad
+            textField.autocorrectionType = .default
+            textField.clearButtonMode = .whileEditing
+            textField.text = ""
+            textField.placeholder = "Numero de Staff"
+        }
+        alert.addTextField { (textField: UITextField) in
+            textField.keyboardAppearance = .dark
+            textField.keyboardType = .numberPad
+            textField.autocorrectionType = .default
+            textField.clearButtonMode = .whileEditing
+            textField.text = ""
+            textField.placeholder = "Pin"
+        }
+        // Add action buttons and present the Alert
+        alert.addAction(cancel)
+        alert.addAction(submitAction)
+        present(alert, animated: true, completion: nil)
+        
+    }
+    
     private func willPickUp() {
         dateFormatter.dateFormat = "ddMMyy"
         let date = dateFormatter.string(from: Date())
@@ -270,7 +411,9 @@ class MainTVC: UITableViewController {
 
         for (key, student) in students {
             let sessionData = ["session": "\(date)\(student["class"] ?? "")",
-                "date": date]
+                "date": date,
+                "status": InZone.willPU.description,
+                "statusK": "\(student["school"] ?? "")\(student["class"] ?? "")\(InZone.willPU.description)"]
             
             self.firebaseRef.child("Students/\(key)").updateChildValues(sessionData)
             
@@ -294,6 +437,23 @@ class MainTVC: UITableViewController {
         if studentsAvailable {
             locationManager.startUpdatingLocation() //asg when do we stop
         }
+    }
+    
+    private func isTransferedTo(_ student:String) -> String? {
+        for (_, element) in transfers {
+            if let theStudent = element["student"] as? String, theStudent == student {
+                if let transfers = element["transfers"] as? String, let name = element["name"] as? String {
+                    let components = transfers.split(separator: ",")
+                    let today = DayButton.dateString(forDate: Date())
+                    for transferDay in components {
+                        if transferDay == today {
+                            return name
+                        }
+                    }
+                }
+            }
+        }
+        return nil
     }
     
     private func getSchool(_ schoolNum:String) -> NSMutableDictionary? {
@@ -322,7 +482,7 @@ class MainTVC: UITableViewController {
         
         var retString = ""
     
-        for i in 1...6 {
+        for _ in 1...6 {
             let num = Int(arc4random_uniform(UInt32(chars.count)))
             retString += chars[num]
         }
@@ -334,6 +494,8 @@ class MainTVC: UITableViewController {
 
     override func numberOfSections(in tableView: UITableView) -> Int {
         // #warning Incomplete implementation, return the number of sections
+        
+        
         return 2
     }
 
@@ -344,7 +506,7 @@ class MainTVC: UITableViewController {
             return studentKeys.count
         }
         else {
-            return 2
+            return 3
         }
     }
 
@@ -355,34 +517,45 @@ class MainTVC: UITableViewController {
             let key = studentKeys[indexPath.row]
             if let student = students[key] {
                 cell.nameLabel.text = student["name"] as? String ?? ""
-                cell.lastNameLabrel.text = student["lastName"]  as? String ?? ""
+                cell.lastNameLabel.text = student["lastName"]  as? String ?? ""
                 cell.classroomLabel.text = student["class"] as? String ?? ""
                 var school:NSMutableDictionary?
                 
-                if let schoolNum = student["school"] as? String {
-                    school = getSchool(schoolNum)
-                }
-                
-                switch InZone(rawValue: student["status"] as? String ?? "none") ?? .none {
-                case .willPU:
-                    cell.messageLabel.text = "En camino a recogerlo"
+                if let pickedUpBy = isTransferedTo(key) {
+                    cell.messageLabel.text = "Lo recogera: \(pickedUpBy)"
                     cell.containerView.backgroundColor = .white
-                case .delivery:
-                    cell.messageLabel.text = "En Entrega"
-                    cell.containerView.backgroundColor = .red
-                case .aproximation:
-                    cell.messageLabel.text = "En Aproximación"
-                    cell.containerView.backgroundColor = .green
-                case .closeness:
-                    cell.messageLabel.text = "En Cercania"
-                    cell.containerView.backgroundColor = .blue
-                default:
-                    cell.containerView.backgroundColor = #colorLiteral(red: 0.8039215803, green: 0.8039215803, blue: 0.8039215803, alpha: 1)
-                    if let school = school {
-                        cell.messageLabel.text = school["name"] as? String ?? ""
+                    cell.willPickup = false
+                }
+                else {
+                    cell.willPickup = true
+                    if let schoolNum = student["school"] as? String {
+                        school = getSchool(schoolNum)
                     }
-                    else {
-                        cell.messageLabel.text = ""
+                    
+                    switch InZone(rawValue: student["status"] as? String ?? "none") ?? .none {
+                    case .willPU:
+                        cell.messageLabel.text = "En camino a recogerlo"
+                        cell.containerView.backgroundColor = .white
+                    case .delivery:
+                        cell.messageLabel.text = "En Entrega"
+                        cell.containerView.backgroundColor = .red
+                    case .aproximation:
+                        cell.messageLabel.text = "En Aproximación"
+                        cell.containerView.backgroundColor = .green
+                    case .closeness:
+                        cell.messageLabel.text = "En Cercania"
+                        cell.containerView.backgroundColor = .blue
+                    case .pickedUp:
+                        cell.messageLabel.text = "Recogido"
+                        cell.containerView.backgroundColor = .purple
+                    default:
+                        cell.containerView.backgroundColor = #colorLiteral(red: 0.8039215803, green: 0.8039215803, blue: 0.8039215803, alpha: 1)
+                        if let school = school {
+                            cell.messageLabel.text = school["name"] as? String ?? ""
+                        }
+                        else {
+                            cell.messageLabel.text = ""
+                        }
                     }
                 }
             }
@@ -396,7 +569,16 @@ class MainTVC: UITableViewController {
             // Configure the cell...
             let buttonLabel = cell.viewWithTag(1) as! UILabel
             
-            buttonLabel.text = indexPath.row == 0 ? "Agregar Alumno" : "En Camino por Ellos"
+            switch indexPath.row {
+            case 0:
+                buttonLabel.text = "En Camino por Ellos"
+            case 1:
+                buttonLabel.text = "Agregar Alumno"
+            case 2:
+                buttonLabel.text = self.staff == nil ? "Registro de Staff" : "Es hora de la salida"
+            default:
+                buttonLabel.text = ""
+            }
             
             return cell
 
@@ -409,14 +591,32 @@ class MainTVC: UITableViewController {
         }
         
         if indexPath.section == 0 {
-            
+            let key = studentKeys[indexPath.row]
+            if let student = students[key], let status = student["status"] as? String {
+                if status != InZone.none.description {
+// asg                   let sessionData = ["status":InZone.pickedUp.description] as [String : Any]
+//
+//                    self.firebaseRef.child("Students/\(key)").updateChildValues(sessionData)
+                    selectedStudent = key
+                    performSegue(withIdentifier: "toCalendar", sender: self)
+                }
             }
+        }
         else {
-            if indexPath.row == 0 {
-                addStudent()
-            }
-            else {
+            switch indexPath.row {
+            case 0:
                 willPickUp()
+            case 1:
+                addStudent()
+            case 2:
+                if self.staff == nil {
+                    addStaff()
+                }
+                else {
+                    performSegue(withIdentifier: "toGuardChooser", sender: self)
+                }
+            default:
+                break
             }
         }
     }
@@ -455,16 +655,23 @@ class MainTVC: UITableViewController {
     }
     */
 
-    /*
     // MARK: - Navigation
 
     // In a storyboard-based application, you will often want to do a little preparation before navigation
     override func prepare(for segue: UIStoryboardSegue, sender: Any?) {
         // Get the new view controller using segue.destinationViewController.
         // Pass the selected object to the new view controller.
+        if segue.identifier == "toGuardChooser" {
+            let destination = segue.destination as! GuardChooserTVC
+            
+            destination.staff = self.staff
+        }
+        else if segue.identifier == "toCalendar" {
+            let destination = segue.destination as! CalendarTVC
+            
+            destination.studentId = selectedStudent
+        }
     }
-    */
-
 }
 
 extension MainTVC: CLLocationManagerDelegate {
@@ -494,15 +701,17 @@ extension MainTVC: CLLocationManagerDelegate {
                     let zone = door.getZone(lat: locValue.latitude, lng: locValue.longitude)
                     
                     for (stKey,student) in self.students {
-                        if let school = student["school"] as? String, let door = student["door"] as? String {
-                            if school + door == key {
+                        if let school = student["school"] as? String, let door = student["door"] as? String, let room = student["class"] as? String {
+                            let status = student["status"] as? String ?? InZone.none.description
+                            if status != InZone.pickedUp.description, school + door == key {
                                 
                                 let sessionData = ["lat": locValue.latitude,
                                                    "lng": locValue.longitude,
                                                    "accuracy": accuracy,
                                                    "time": time,
                                                    "distance" : distance,
-                                                   "status" : zone.description] as [String : Any]
+                                                   "status" : zone.description,
+                                                   "statusK" : "\(school)\(room)\(zone.description)"] as [String : Any]
                                 
                                 self.firebaseRef.child("Students/\(stKey)").updateChildValues(sessionData)
                             }

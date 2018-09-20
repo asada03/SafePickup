@@ -10,11 +10,12 @@ import UIKit
 import CoreLocation
 
 enum InZone: String {
-    case none = "none"
-    case willPU = "willPU"
-    case delivery =  "deliv"
-    case aproximation =  "aprox"
-    case closeness = "close"
+    case none = "NO" //none
+    case willPU = "WP"
+    case delivery =  "DV"
+    case aproximation =  "AP"
+    case closeness = "CL"
+    case pickedUp = "PU"
     
     var description: String {
         return self.rawValue
