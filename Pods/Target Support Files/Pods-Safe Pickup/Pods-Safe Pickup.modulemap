@@ -1,0 +1,6 @@
+framework module Pods_Safe_Pickup {
+  umbrella header "Pods-Safe Pickup-umbrella.h"
+
+  export *
+  module * { export * }
+}
